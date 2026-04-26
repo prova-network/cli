@@ -7,6 +7,8 @@
 //   prova ls                — list your files
 //   prova whoami            — show signed-in identity + quota usage
 //   prova logout            — clear local creds
+//   prova hash <file>       — compute the piece-cid of a local file (no network)
+//   prova verify <cid> <f>  — verify a file matches a piece-cid (no network)
 //   prova help              — show usage
 
 import { putCmd } from './cmd/put.mjs';
@@ -15,19 +17,23 @@ import { authCmd } from './cmd/auth.mjs';
 import { lsCmd } from './cmd/ls.mjs';
 import { whoamiCmd } from './cmd/whoami.mjs';
 import { logoutCmd } from './cmd/logout.mjs';
+import { hashCmd } from './cmd/hash.mjs';
+import { verifyCmd } from './cmd/verify.mjs';
 
 const VERSION = '0.1.0';
 
 const HELP = `
 \x1b[1mProva CLI\x1b[0m \x1b[2mv${VERSION}\x1b[0m
 
-  prova \x1b[36mauth\x1b[0m                 Sign in with your email
-  prova \x1b[36mput\x1b[0m \x1b[2m<file>\x1b[0m          Upload a file, get a piece-cid
-  prova \x1b[36mget\x1b[0m \x1b[2m<cid> [-o out]\x1b[0m  Retrieve a file by cid
-  prova \x1b[36mls\x1b[0m                   List your files
-  prova \x1b[36mwhoami\x1b[0m               Show signed-in identity + usage
-  prova \x1b[36mlogout\x1b[0m               Forget your credentials
-  prova \x1b[36mhelp\x1b[0m                 This help
+  prova \x1b[36mauth\x1b[0m                  Sign in with your email
+  prova \x1b[36mput\x1b[0m \x1b[2m<file>\x1b[0m           Upload a file, get a piece-cid
+  prova \x1b[36mget\x1b[0m \x1b[2m<cid> [-o out]\x1b[0m   Retrieve a file by cid
+  prova \x1b[36mls\x1b[0m                    List your files
+  prova \x1b[36mwhoami\x1b[0m                Show signed-in identity + usage
+  prova \x1b[36mlogout\x1b[0m                Forget your credentials
+  prova \x1b[36mhash\x1b[0m \x1b[2m<file>\x1b[0m          Compute the piece-cid of a local file (no network)
+  prova \x1b[36mverify\x1b[0m \x1b[2m<cid> <file>\x1b[0m   Verify a file matches a piece-cid (no network)
+  prova \x1b[36mhelp\x1b[0m                  This help
 
   prova \x1b[36m--version\x1b[0m
 
@@ -53,6 +59,8 @@ export async function run(argv) {
     case 'ls':      return lsCmd(rest);
     case 'whoami':  return whoamiCmd(rest);
     case 'logout':  return logoutCmd(rest);
+    case 'hash':    return hashCmd(rest);
+    case 'verify':  return verifyCmd(rest);
     default:
       console.error(`\x1b[31munknown command:\x1b[0m ${cmd}`);
       process.stdout.write(HELP);
