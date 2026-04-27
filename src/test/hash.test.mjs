@@ -175,3 +175,90 @@ test('prova verify exits 2 with too few args', async () => {
   assert.equal(code, 2);
   assert.match(stderr, /Usage/);
 });
+
+// Regression tests for the multihash codec encoding in the piece-CID.
+//
+// Bug history: prior to 2026-04-26, encodeFilCommP() in src/util/hash.mjs
+// emitted bytes (0x91 0x20) for the multihash function field. The comment
+// claimed this was 0x1012 (sha2-256-trunc254-padded, the canonical
+// CommP / piece-CID hash). The actual varint decoding was 0x1011, which
+// is sha2-256-trunc254-padded-binary-tree-multilayer (a deprecated CommD
+// aggregation hash, NOT a piece-CID hash).
+//
+// Effect: the Node CLI emitted CIDs starting with `baga6ea4r…` while the
+// canonical FilOzone Go implementation emits `baga6ea4s…`. The 32-byte
+// commitment digest payload was correct in both, so the bug was hard to
+// catch — it looked like a piece-CID, parsed as a piece-CID, and would
+// have round-tripped through any code that didn't strictly validate the
+// multihash function code. But the on-chain ProofVerifier and any
+// canonical Filecoin tooling would have rejected it.
+//
+// Fixed by changing the byte sequence to (0x92 0x20) which is the correct
+// varint encoding of 0x1012. These tests pin the new behavior.
+
+test('computeCid emits the canonical piece-CID prefix `baga6ea4s…`, not the buggy `baga6ea4r…`', async () => {
+  const cid = await computeCid(Buffer.from('regression test for the codec bug'));
+  assert.match(cid, /^baga6ea4s/, `expected 'baga6ea4s' prefix, got: ${cid}`);
+  assert.doesNotMatch(cid, /^baga6ea4r/, `legacy buggy prefix detected: ${cid}`);
+});
+
+test('computeCid uses the correct multihash function code (0x1012, sha2-256-trunc254-padded)', async () => {
+  // Decode the CID base32 and pull out the multihash function varint to
+  // verify it's 0x1012, not 0x1011.
+  const cid = await computeCid(Buffer.from('multihash codec verify'));
+  assert.match(cid, /^b/, 'CID should have the base32 multibase prefix');
+
+  // tiny base32-lower-no-pad decoder, mirrored from src/util/hash.mjs
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
+  let val = 0, bits = 0;
+  const bytes = [];
+  for (const c of cid.slice(1).toLowerCase()) {
+    const v = ALPHABET.indexOf(c);
+    if (v < 0) continue;
+    val = (val << 5) | v;
+    bits += 5;
+    if (bits >= 8) { bits -= 8; bytes.push((val >> bits) & 0xff); }
+  }
+
+  // CIDv1 layout for fil-commitment-unsealed:
+  //   bytes[0]   = 0x01  (CIDv1 marker)
+  //   bytes[1..3] = 0x81 0xe2 0x03  (varint 0xf101, fil-commitment-unsealed codec)
+  //   bytes[4..5] = 0x92 0x20       (varint 0x1012, sha2-256-trunc254-padded)
+  //   bytes[6]   = 0x20  (32-byte digest length)
+  //   bytes[7..38] = digest
+  assert.equal(bytes[0], 0x01, 'CIDv1 marker');
+  assert.equal(bytes[1], 0x81, 'codec varint byte 1');
+  assert.equal(bytes[2], 0xe2, 'codec varint byte 2');
+  assert.equal(bytes[3], 0x03, 'codec varint byte 3');
+  assert.equal(bytes[4], 0x92, 'multihash fn varint byte 1 (BUG: was 0x91)');
+  assert.equal(bytes[5], 0x20, 'multihash fn varint byte 2');
+  assert.equal(bytes[6], 0x20, 'digest length prefix (32 bytes)');
+
+  // Decode the multihash varint to confirm the SEMANTIC value is 0x1012.
+  const fnVarint = (bytes[5] & 0x7f) << 7 | (bytes[4] & 0x7f);
+  // Wait — varint decoding is little-endian: low byte first. byte4 is the
+  // first byte (continuation bit set), byte5 is the second.
+  // value = (byte4 & 0x7f) | ((byte5 & 0x7f) << 7)
+  const decoded = (bytes[4] & 0x7f) | ((bytes[5] & 0x7f) << 7);
+  assert.equal(decoded, 0x1012, `multihash fn must be 0x1012, got 0x${decoded.toString(16)}`);
+});
+
+test('computeCid output matches the canonical FilOzone go-fil-commp-hashhash implementation', async () => {
+  // These piece-CIDs were produced by the canonical Go implementation
+  // (github.com/filecoin-project/go-fil-commp-hashhash + go-fil-commcid)
+  // running on Linux x86_64 / Go 1.25 in the Prova prover repo. The Node
+  // CLI MUST produce byte-identical output for the same inputs.
+  //
+  // To regenerate: in prover/ on Linux, write the input to a file and
+  // run `go run ./cmd/cidtest <file>`.
+  const fixtures = [
+    {
+      input: 'Cross-implementation determinism test for Prova: Go pdptree must match the CLI Node implementation, both ports of the canonical Filecoin CommP algorithm.',
+      expected: 'baga6ea4seaqhlhtpch3xor2hf6px6db5b4cfmnyfdhto4ji5na3tphwmoysbkjq',
+    },
+  ];
+  for (const { input, expected } of fixtures) {
+    const got = await computeCid(Buffer.from(input));
+    assert.equal(got, expected, `mismatch for input ${JSON.stringify(input.slice(0, 40))}…`);
+  }
+});

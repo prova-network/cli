@@ -71,9 +71,23 @@ function encodeFilCommP(digest32) {
   const out = new Uint8Array(1 + 3 + 2 + 1 + 32);
   let i = 0;
   out[i++] = 0x01;                   // CIDv1
-  out[i++] = 0x81; out[i++] = 0xe2; out[i++] = 0x03; // 0xf101 codec
-  out[i++] = 0x91; out[i++] = 0x20;  // 0x1012 hash function
-  out[i++] = 0x20;                   // 32-byte digest
+  // codec varint: 0xf101 = `fil-commitment-unsealed`
+  // (varint(0xf101) = 0x81 0xe2 0x03)
+  out[i++] = 0x81; out[i++] = 0xe2; out[i++] = 0x03;
+  // multihash function varint: 0x1012 = `sha2-256-trunc254-padded`
+  // (varint(0x1012) = 0x92 0x20)
+  //
+  // BUG FIX 2026-04-26: previous code emitted (0x91 0x20) which decodes
+  // as varint 0x1011 = `sha2-256-trunc254-padded-binary-tree-multilayer`,
+  // a deprecated codec that's used for CommD aggregations, not CommP.
+  // The 32-byte digest payload was correct but the surrounding CID prefix
+  // pointed at the wrong multihash function, producing piece-CIDs that
+  // started with `baga6ea4r` instead of the canonical `baga6ea4s`.
+  // Cross-validated against `github.com/filecoin-project/go-fil-commp-hashhash`
+  // on Linux x86_64 — with this fix, identical input bytes now produce
+  // byte-identical piece-CIDs across the Node CLI and the Go prover.
+  out[i++] = 0x92; out[i++] = 0x20;
+  out[i++] = 0x20;                   // 32-byte digest length prefix
   out.set(digest32, i);
   return 'b' + base32LowerNoPad(out);
 }
